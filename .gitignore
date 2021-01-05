@@ -11,3 +11,7 @@ pom.xml.asc
 .hgignore
 .hg/
 .DS_Store
+.calva/
+.clj-kondo/
+.lsp/
+resources/new-config.edn
