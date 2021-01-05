@@ -14,4 +14,4 @@ pom.xml.asc
 .calva/
 .clj-kondo/
 .lsp/
-resources/new-config.edn
+resources/my-config.edn
