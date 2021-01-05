@@ -2,68 +2,82 @@
   (:gen-class)
   (:require [clj-http.client :as http]
             [clojure.data.json :as json]
-            [my-pocket-parser.helpers :refer :all]
-            [my-pocket-parser.stats :refer :all]))
+            [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]))
 
-;; https://getpocket.com/developer/docs/v3/retrieve
-(def pocket-get-url (build-url "https://getpocket.com" "v3" "get"))
+(def config
+  (when-let [data (slurp (io/reader (io/resource "config.edn")))]
+    (edn/read-string data)))
 
-(defn create-json-payload
-  [consumer-key access-token]
-  (json/write-str {:consumer_key consumer-key
-                   :access_token access-token
-                   :state "unread"
-                   :count "2"
-                   :detailType "complete"}))
+(def redirect-url "http://google.com")
 
-(defn http-retrieve
-  [url request_body]
-  (let [resp (http/post url {:body request_body
-                             :content-type :json})]
-    (when (= 200 (:status resp))
-      (json/read-str (:body resp)
-                     :key-fn keyword))))
+(defn fetch-code! []
+  (-> "https://getpocket.com/v3/oauth/request"
+      (http/post {:content-type :json
+                  :body         (json/write-str {:consumer_key (:consumer-key config)
+                                                 :redirect_uri redirect-url})})
+      :body
+      (str/replace "code=" "")))
 
-;; Testers
-; call retrieve
-(def m (http-retrieve pocket-get-url (create-json-payload (:consumer-key read-config)
-                                                          (:access-token read-config))))
-; (:list m)
-; (get m :list) ; list of items
-(def items (get m :list))
+(defn authorize! [code]
+  (-> "https://getpocket.com/v3/oauth/authorize"
+      (http/post {:content-type :json
+                  :body         (json/write-str {:code code
+                                                 :consumer_key (:consumer-key config)})})
+      :body
+      (str/split #"\&")
+      first
+      (str/replace "access_token=" "")))
 
-;; convert :time_added into time (is unix timestamp)
-;;(defn get-specific-keys-for-item
-;;  "Return the specific keys for an item"
-;;  [item]
-;;  (select-keys (second item) [:given_url :favorite :time_added]))
-  ;;(get-in (second item) [:given_url]))
+(comment
+  (format "https://getpocket.com/auth/authorize?request_token=%s&redirect_uri=%s"
+          "2a63bfbc-ad4e-c764-4016-435fcb"
+          "http://google.com"))
 
-;; each key in items
-;; get [:given_url :favorite :time_added]
-;; (def working-map (map get-keys-for-item items))
+(defn get-pocket-data
+  []
+  (-> "https://getpocket.com/v3/get"
+      (http/post {:body (json/write-str {:consumer_key (:consumer-key config)
+                                         :access_token (:access-token config)
+                                         :state "unread"
+                                         ;; :count "2"
+                                         :detailType "complete"})
+                  :content-type :json})
+      :body
+      (json/read-str :key-fn keyword)))
 
-;; (defn convert-time
-  ;; "Return a new map with :time_added updated to actual timestamp"
-  ;; [datamap]
-  ;; (map :time_added datamap))
-;; probably create a function that extracts the :time_added for each item, then converts the time and puts it back in each item + return
+;; Get a URL to authorize
+(defn generate-url! []
+  (let [code (fetch-code!)]
+    {:code code
+     :url (format "https://getpocket.com/auth/authorize?request_token=%s&redirect_uri=%s"
+                  code
+                  redirect-url)}))
 
-;; (defn sequence-of-events
-  ;; []
-  ;; (-> working-map ; get data, then transform
-      ;; convert-time));TODO-> ))
-;; (transform convert_time working_map) 
+(defn write-new-config! [access-token]
+  (spit "resources/new-config.edn" (pr-str (assoc config :access-token access-token))))
 
-(defn -main
-  "Grab dataset from Pocket and display stats"
-  [& args]
-  ;; (prn (count (sequence-of-events)))) ; temp: print the count of the map
-  (let [i (partial items->seq-for-keyword items)]
-    (do
-      (prn (frequencies (i :status)))
-      (prn (frequencies (i :favorite)))
-      (prn (->>
-            (i :time_added)
-            (map str->int) ; convert to number
-            (map epoch->time)))))) ;convert to timestamp
+;; ======================================================================
+;; Docs for how to use these functions in the REPL:
+;; ======================================================================
+
+(comment
+  (do
+    ;; Generate the code (aka "request_token", as sometimes referenced in Pocket's docs).
+    (def -out (generate-url!))
+    (def -code (:code -out))
+    (def -url (:url -out))
+    ;; Go to the url and go through pocket's flow. (This step is manual.)
+    (print "Now go to the url:" -url)
+    -out)
+
+  ;; After you do that, the following code block will authorize the code and
+  ;; write it to `config.edn`.
+  (let [access-token (authorize! -code)]
+    (write-new-config! access-token)
+    access-token)
+
+  ;; Now, you can call the following to actually get your data.
+  ;; Beware: If you have a lot of notes, printing the result can take ages!
+  (def -your-pocket-data (get-pocket-data)))

@@ -1,2 +1,3 @@
+;; Duplicate this and name the new copy `new-config.edn`
 {:consumer-key "put your own"
  :access-token "put your own"}
